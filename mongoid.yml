@@ -1,0 +1,16 @@
+development:
+  sessions:
+    default:
+      database: events_dev
+      hosts:
+        - localhost:27017
+
+test:
+  sessions:
+    default:
+      database: events_test
+      hosts:
+        - localhost:27017
+
+production:
+  uri: <%= ENV['MONGOLAB_URL'] %>
