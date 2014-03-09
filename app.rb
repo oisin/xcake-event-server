@@ -22,9 +22,44 @@ class App < Sinatra::Base
     end
   end
 
+  get '/dbsetup' do
+    puts "Setting up database"
+    u = User.where(email: 'o@converser.io').first
+    if u.nil?
+      us = User.create {|u|
+        u.email = "o@converser.io"
+        u.name = "Oisin Hurley"
+        u.admin = true
+        u.password = "wibble"
+      }
+
+      events = []
+      %w{event1 event2 event3 event4}.each_with_index {|name, inx|
+        events[inx] = Event.create {|ev|
+          ev.name = name
+          ev.organizer = 'o@converser.io'
+          ev.location = "Science Gallery"
+          ev.description = "Some kind of a hoolie"
+          day = rand(27) + 1
+          month = rand(11) + 1
+          ev.starts = Time.gm(2014, month, day, 18, 30).utc
+          ev.ends =  Time.gm(2014, month, day, 20, 30).utc
+        }
+
+        att = Attendance.create {|a|
+          a.interested = (rand(10) > 5)
+          a.attending = (rand(10) <= 5)
+          a.user = us
+          a.event = events[inx]
+        }
+      }
+
+    end
+  end
+
   namespace '/api' do
     get '/events' do
-      Event.all.desc(:when).to_a.to_json
+      all = Event.all.desc(:when).to_a.to_json
     end
 
     get '/event/:id' do
