@@ -17,6 +17,7 @@ class Event
 
   def as_json(options={})
     {
+      ref: _id.to_s,
       name: n,
       organizer: o,
       location: l,

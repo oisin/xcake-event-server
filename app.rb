@@ -1,6 +1,7 @@
 require 'sinatra'
 require 'sinatra/namespace'
 require 'mongoid'
+require 'warden'
 
 require_relative 'events'
 require_relative 'users'
@@ -14,12 +15,52 @@ class App < Sinatra::Base
   MINOR_VERSION = 0
   VERSION_REGEX = %r{/api/v(\d)\.(\d)}
 
+  use Rack::Session::Cookie, secret: ENV['RACK_SECRET'] || "wibblewibblewubble"
+
+  use Warden::Manager do |mang|
+    mang.default_strategies :password, :token
+    mang.failure_app = self
+    mang.serialize_into_session { |user| user._id }
+    mang.serialize_from_session { |id| User.find(id) }
+  end
+
+  Warden::Strategies.add(:token) do
+    def authenticate!
+      user = User.authenticate_with_token(params['token'])
+      user.nil? ? fail!({errors: ['invalid token']}.to_json) : success!(user)
+    end
+  end
+
+  Warden::Strategies.add(:password) do
+    def valid?
+      env['credentials']['email'] && env['credentials']['password']
+    end
+
+    def authenticate!
+      user = User.authenticate_with_password(env['credentials']['email'], env['credentials']['password'])
+      unless user.nil?
+        user.auth_token = SecureRandom.urlsafe_base64
+        user.auth_expiry = Time.now.utc + (24 * 60 * 60) # expire after 24 hours
+        user.save
+        custom! [200, {}, { token: user.auth_token }.to_json]
+      else
+        fail!({errors: ['invalid email or password']})
+      end
+    end
+  end
+
   configure do
     Mongoid.configure do |config|
       Mongoid.logger = nil
       Mongoid.raise_not_found_error = true
       Mongoid.load!("mongoid.yml")
     end
+  end
+
+
+  # Auth fails. No bacon.
+  post '/unauthenticated' do
+    halt 403, { errors: ['you need to log in now']}.to_json
   end
 
   get '/dbsetup' do
@@ -59,19 +100,32 @@ class App < Sinatra::Base
 
   namespace '/api' do
     get '/events' do
-      all = Event.all.desc(:when).to_a.to_json
+      # return all the public events and include data if they are interested/attending
+      # by the current user if there is one
+      result = []
+      Event.all.desc(:when).each { |ev|
+        hash = ev.as_json
+
+        if env['warden'].user
+          if (my = Attendance.where(user: env['warden'].user, event: ev).first)
+            hash['interested'] = my.interested
+            hash['attending'] = my.attending
+          end
+        end
+        result << hash
+      }
+
+      result.to_json
     end
 
     get '/event/:id' do
       result = {}
       begin
         ev_hash = Event.find(params[:id]).as_json
-        att = current_user.attendances.where(event: params[:id]).first
-        unless att.nil?
+        unless env['warden'].authenticate(:token).nil?
+          att = env['warden'].user.attendances.where(event: params[:id]).first
           ev_hash['interested'] = att.interested
           ev_hash['attending'] = att.attending
-        else
-          ev_hash['interested'] = ev_hash['attending'] = false
         end
         ev_hash.to_json
       rescue Exception => e
@@ -80,6 +134,8 @@ class App < Sinatra::Base
     end
 
     post '/event/:id' do
+      env['warden'].authenticate!(:token)
+
       begin
         marks = JSON.parse(request.body.read)
         ev = Event.find(params[:id])
@@ -90,9 +146,23 @@ class App < Sinatra::Base
         att.interested = marks['interested'] if marks['interested']
         att.attending = marks['attending'] if marks['attending']
         att.save
+        if att.errors.empty?
+          halt 200
+        else
+          halt 400, { errors: att.errors }.to_json
+        end
       rescue StandardError => e
         halt 404
       end
+    end
+
+    post '/login' do
+      env['credentials'] = JSON.parse(request.body.read)
+      env['warden'].authenticate!(:password)
+    end
+
+    post '/logout' do   # TODO: does this mean clear the token too.
+      env['warden'].logout
     end
 
     post '/register' do
@@ -102,15 +172,17 @@ class App < Sinatra::Base
         u = User.create { |u|
           u.email = data['email']
           u.password = data['password']
+          u.auth_token = SecureRandom.urlsafe_base64
+          u.auth_expiry = Time.now.utc + (24 * 60 * 60) # expire after 24 hours
         }
         u.save
         unless u.errors.empty?
           halt 400, {errors: u.errors}.to_json
         else
-          201
+          halt 201, { token: u.auth_token }.to_json
         end
       else
-        halt 400, {errors: ['email already registered']}.to_json
+        halt 409, {errors: ['email already registered']}.to_json
       end
     end
   end
