@@ -44,7 +44,7 @@ class App < Sinatra::Base
         user.save
         custom! [200, {}, { token: user.auth_token }.to_json]
       else
-        custom! [403, {}, {errors: ['invalid email or password']}]
+        custom! [403, {}, { errors: ['invalid email or password'] }.to_json]
       end
     end
   end
@@ -57,45 +57,9 @@ class App < Sinatra::Base
     end
   end
 
-
   # Auth fails. No bacon.
   post '/unauthenticated' do
     halt 403, { errors: ['you need to log in now']}.to_json
-  end
-
-  get '/dbsetup' do
-    puts "Setting up database"
-    u = User.where(email: 'o@converser.io').first
-    if u.nil?
-      us = User.create {|u|
-        u.email = "o@converser.io"
-        u.name = "Oisin Hurley"
-        u.admin = true
-        u.password = "wibble"
-      }
-
-      events = []
-      %w{event1 event2 event3 event4}.each_with_index {|name, inx|
-        events[inx] = Event.create {|ev|
-          ev.name = name
-          ev.organizer = 'o@converser.io'
-          ev.location = "Science Gallery"
-          ev.description = "Some kind of a hoolie"
-          day = rand(27) + 1
-          month = rand(11) + 1
-          ev.starts = Time.gm(2014, month, day, 18, 30).utc
-          ev.ends =  Time.gm(2014, month, day, 20, 30).utc
-        }
-
-        att = Attendance.create {|a|
-          a.interested = (rand(10) > 5)
-          a.attending = (rand(10) <= 5)
-          a.user = us
-          a.event = events[inx]
-        }
-      }
-
-    end
   end
 
   namespace '/api' do
@@ -122,13 +86,14 @@ class App < Sinatra::Base
       result = {}
       begin
         ev_hash = Event.find(params[:id]).as_json
-        unless env['warden'].authenticate(:token).nil?
+        if env['warden'].authenticate(:token)
           att = env['warden'].user.attendances.where(event: params[:id]).first
           ev_hash['interested'] = att.interested
           ev_hash['attending'] = att.attending
         end
         ev_hash.to_json
       rescue Exception => e
+        puts "----> EXCEPTION: #{e.inspect}"
         halt 404
       end
     end
@@ -157,11 +122,18 @@ class App < Sinatra::Base
     end
 
     post '/login' do
-      env['credentials'] = JSON.parse(request.body.read)
-      env['warden'].authenticate!(:password)
+      begin
+        env['credentials'] = JSON.parse(request.body.read)
+        env['warden'].authenticate!(:password)
+      rescue JSONError => e
+        halt 400, { errors: ['cannot parse the json in the post body']}
+      end
     end
 
     post '/logout' do   # TODO: does this mean clear the token too.
+      u = User.where(auth_token: env['warden'].user.auth_token).first
+      u.auth_token = u.auth_expiry = nil
+      u.save
       env['warden'].logout
     end
 
