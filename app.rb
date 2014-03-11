@@ -44,7 +44,7 @@ class App < Sinatra::Base
         user.save
         custom! [200, {}, { token: user.auth_token }.to_json]
       else
-        fail!({errors: ['invalid email or password']})
+        custom! [403, {}, {errors: ['invalid email or password']}]
       end
     end
   end
@@ -157,6 +157,7 @@ class App < Sinatra::Base
     end
 
     post '/login' do
+      require 'pry' ; bindings.pry
       env['credentials'] = JSON.parse(request.body.read)
       env['warden'].authenticate!(:password)
     end
