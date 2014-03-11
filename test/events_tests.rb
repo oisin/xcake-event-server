@@ -126,6 +126,7 @@ class EventTests < MiniTest::Unit::TestCase
     assert_equal 200, last_response.status
 
     result = JSON.parse(last_response.body)
+
     assert result['attending']
     refute result['interested']
   end
