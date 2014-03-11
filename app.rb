@@ -157,7 +157,6 @@ class App < Sinatra::Base
     end
 
     post '/login' do
-      require 'pry' ; bindings.pry
       env['credentials'] = JSON.parse(request.body.read)
       env['warden'].authenticate!(:password)
     end
